@@ -191,10 +191,11 @@ class AsyncSpider:
         if response is None and http_request.m_extend_cur_retry_count <= self.m_cfg.m_default_max_retry_count:
             http_request.m_extend_host.push_request(http_request)
         else:
+            cost_time = time.time() - http_request.m_extend_arrive_time
             if response is None:
-                log_info('download %d FAILED: %s' % (http_request.m_extend_idx, http_request.url))
+                log_info('download %d FAILED: %s, cost %f' % (http_request.m_extend_idx, http_request.url, cost_time))
             else:
-                log_info('download %d SUCCESS: %s, use proxy %s' % (http_request.m_extend_idx, http_request.url, proxy))
+                log_info('download %d SUCCESS: %s, cost %f, use proxy %s' % (http_request.m_extend_idx, http_request.url, cost_time, proxy))
             self.__handle_result(response, http_request, proxy)
         self.__fetch_host(http_request.m_extend_host)
     def __fetch_host(self, host, is_timeout = False):
