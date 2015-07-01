@@ -148,6 +148,13 @@ class AsyncSpider:
         self.m_req_idx = 0
         if self.m_cfg.m_use_proxy:
             self.__obtain_proxy()
+        if self.m_cfg.m_max_fetching_count > 1000:
+            max_conn_limit = self.m_cfg.m_max_fetching_count + 64
+            try:
+                os.system('ulimit -n %d' % max_conn_limit)
+            except Exception, err:
+                log_error('exception occur: %s' % err)
+                sys.exit(1)
     def __split_host_port(self, proxy):
         cols = proxy.split(':')
         if len(cols) < 1 or (len(cols) > 1 and not cols[1].isdigit()):
