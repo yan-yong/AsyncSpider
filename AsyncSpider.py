@@ -38,7 +38,9 @@ class Config:
         self.m_default_host_max_fetching_count = 1024
         '''默认每个host的抓取间隔'''
         self.m_default_host_fetch_interval_sec = 10
-        '''默认抓取连接超时'''
+        '''默认抓取超时, 总的超时'''
+        self.m_default_all_timeout  = 3600
+        '''默认连接超时'''
         self.m_default_conn_timeout = 10
         '''默认请求超时'''
         self.m_default_req_timeout  = 30
@@ -173,13 +175,21 @@ class AsyncSpider:
     def __get_page(self, http_request, proxy_host, proxy_port):
         client   = AsyncHTTPClient()
         response = None
-        proxy = "None"
+        proxy = None
+        io_loop = tornado.ioloop.IOLoop.instance()
+        cur_time = time.time()
+        '''总的抓取超时'''
+        if http_request.m_extend_arrive_time + http_request.m_extend_all_timeout < cur_time:
+            log_error('download %d %s http error: all timeout.' % (http_request.m_extend_idx,  http_request.url))
+            self.__handle_result(None, http_request, proxy)
+            io_loop.add_timeout(cur_time, lambda:self.__fetch_host(http_request.m_extend_host))
+            return
+        self.m_fetching_count += 1
         if proxy_host is not None and proxy_port is not None:
             http_request.proxy_host = proxy_host
             http_request.proxy_port = proxy_port
             proxy = '%s:%d' % (proxy_host, proxy_port)
         try:
-            self.m_fetching_count += 1
             log_info('begin download %d: %s, use proxy %s, retry %d' % \
                 (http_request.m_extend_idx, http_request.url, proxy, http_request.m_extend_cur_retry_count))
             response = yield client.fetch(http_request)
@@ -197,7 +207,8 @@ class AsyncSpider:
             else:
                 log_info('download %d SUCCESS: %s, cost %f, use proxy %s' % (http_request.m_extend_idx, http_request.url, cost_time, proxy))
             self.__handle_result(response, http_request, proxy)
-        self.__fetch_host(http_request.m_extend_host)
+        '''以异步的方式进行调用，避免调用堆栈过大'''
+        io_loop.add_timeout(cur_time, lambda:self.__fetch_host(http_request.m_extend_host))
     def __fetch_host(self, host, is_timeout = False):
         if not is_timeout and host.m_scheduling:
             return
@@ -206,8 +217,9 @@ class AsyncSpider:
         io_loop = tornado.ioloop.IOLoop.instance()
         cur_time = time.time()
         while True:
+            '''随机睡眠是为了避免1个host占据所有连接'''
             if self.m_fetching_count >= self.m_cfg.m_max_fetching_count:
-                wait_sec = random.uniform(1, 2)
+                wait_sec = random.uniform(0.5, 1)
                 log_info('%s fetching count %d exceed limit %d, check %f later.' \
                     % (host.m_host_name, self.m_fetching_count, self.m_cfg.m_max_fetching_count, wait_sec))
             else:
@@ -297,8 +309,8 @@ class AsyncSpider:
     def wait(self):
         self.m_pool_thd.join()
     '''放入请求'''
-    def put_request(self, http_request, callback = None, need_overwall = False, priority = Priority.Normal, \
-            max_retry_count = -1, conn_timeout = -1, request_timeout = -1):
+    def put_request(self, http_request, callback = None, all_timeout = -1, need_overwall = False, 
+            priority = Priority.Normal, max_retry_count = -1, conn_timeout = -1, request_timeout = -1):
         self.m_req_idx += 1
         http_request.m_extend_idx = self.m_req_idx
         if self.m_stop:
@@ -322,6 +334,9 @@ class AsyncSpider:
             max_retry_count = self.m_cfg.m_default_max_retry_count
         http_request.m_extend_max_retry_count = max_retry_count
         http_request.m_extend_cur_retry_count = 0
+        if all_timeout < 0:
+            all_timeout = self.m_cfg.m_default_all_timeout
+        http_request.m_extend_all_timeout = all_timeout 
         if conn_timeout < 0:
             conn_timeout = self.m_cfg.m_default_conn_timeout
         http_request.connect_timeout = conn_timeout
@@ -342,7 +357,7 @@ def test_handle_result(response, request, proxy):
 def main():
     cfg = Config()
     proxy_spider = AsyncSpider(cfg)
-    for i in range(1000):
+    for i in range(500):
         http_request = HTTPRequest('http://www.baidu.com/')
         proxy_spider.put_request(http_request, callback=test_handle_result)
         http_request = HTTPRequest('http://www.sina.com.cn/')
